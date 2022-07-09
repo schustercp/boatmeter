@@ -11,8 +11,10 @@
 #define TFT_DC         3
 
 // For 1.14", 1.3", 1.54", 1.69", and 2.0" TFT with ST7789:
+
+//Adafruit_ST7789(int8_t cs, int8_t dc, int8_t rst);
 Adafruit_ST7789 tft1 = Adafruit_ST7789(7, TFT_DC, 6);
-Adafruit_ST7789 tft2 = Adafruit_ST7789(2, TFT_DC, 1);
+Adafruit_ST7789 tft2 = Adafruit_ST7789(2, TFT_DC, 4);
 
 float p = 3.1415926;
 
@@ -44,6 +46,13 @@ unsigned char a_lastCharPos2 = '0';
 
 void setup(void)
 {
+
+  // initialize the serial communication:
+  SerialUSB.begin(9600);
+
+  pinMode(A0, INPUT);
+  pinMode(A1, INPUT);
+  
   // Use this initializer if using a 1.69" 280x240 TFT:
   tft1.init(240, 280);           // Init ST7789 280x240
   tft2.init(240, 280);           // Init ST7789 280x240
@@ -88,25 +97,102 @@ void setup(void)
   tft2.drawChar(86,  y, a_lastCharPos1, ST77XX_WHITE, ST77XX_BLACK, 1, 1);
   tft2.drawChar(148, y, '.', ST77XX_WHITE, ST77XX_BLACK, 1, 1);
   tft2.drawChar(178, y, a_lastCharPos2, ST77XX_WHITE, ST77XX_BLACK, 1, 1);
+
+  /* Enable the APB clock for the ADC. */
+  PM->APBCMASK.reg |= PM_APBCMASK_ADC;
+
+  ADC->REFCTRL.reg = 0x80;                         // Enable Ref Comp and use (INT1V) 1.0V voltage reference
+  ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV512 |    // Divide Clock ADC GCLK by 512 (48MHz/512 = 93.7kHz)
+                   ADC_CTRLB_RESSEL_16BIT;         // Set ADC resolution to 16 bits
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
+  ADC->SAMPCTRL.reg = 0x00;                        // Set max Sampling Time Length to half divided ADC clock pulse (5.33us)
+  ADC->INPUTCTRL.reg = 0x00000000;                 // Set the analog input to A0 and to Scan 1 Channel
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
+  ADC->AVGCTRL.reg = ADC_AVGCTRL_SAMPLENUM_256 |   // Accumulate 256 samples for 16-bit resolution
+                     ADC_AVGCTRL_ADJRES(0);        // Zero result adjust
+  ADC->CTRLA.bit.ENABLE = 0x01;                    // Enable the ADC
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
+
+  if (SerialUSB.available() > 0)
+  {
+    SerialUSB.print("Hello");
+  }
 }
 
 void loop() 
 {
-  float voltage = 0.0; //mVolts
+  while(SerialUSB.available() == 0) 
+  {
+  }
+
+  SerialUSB.print("Hello");
+    
+  float voltage1 = 0.0;
+  float voltage2 = 0.0;
   float current = 0.0; //mAmps
-  float power   = 0.0; //mWatts
+  //float power   = 0.0; //mWatts
 
-  voltage /= 1000.0; //Convert to Volts
-  current /= 1000.0; //Convert to Amps
-  power   /= 1000.0; //Convert to Watts
+  ADC->INPUTCTRL.reg = 0x00000000;                 // Set the analog input to A0
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
 
-  uint8_t tens = (uint8_t)(voltage / 10.0);
-  voltage -= (float)tens * 10.0;
-  uint8_t ones = (uint8_t)voltage;
-  voltage -= (float)ones;
-  voltage *= 10.0;
-  voltage += 0.5; //Round Up
-  uint8_t tenths = (uint8_t)voltage;
+  ADC->SWTRIG.bit.START = 1;                       // Initiate a software trigger to start an ADC conversion
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for write synchronization
+  while(!ADC->INTFLAG.bit.RESRDY);                 // Wait for the conversion to complete
+  uint16_t A0_result = ADC->RESULT.reg;            // Read the ADC result,  This Clears the result ready (RESRDY) interrupt flag
+
+  ADC->INPUTCTRL.reg = 0x00000001;                 // Set the analog input to A1
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
+
+  ADC->SWTRIG.bit.START = 1;                       // Initiate a software trigger to start an ADC conversion
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for write synchronization
+  while(!ADC->INTFLAG.bit.RESRDY);                 // Wait for the conversion to complete
+  uint16_t A1_result = ADC->RESULT.reg;            // Read the ADC result,  This Clears the result ready (RESRDY) interrupt flag
+
+  if (SerialUSB.available() > 0)
+  {
+    SerialUSB.print(A0_result);
+  }
+
+  voltage1 = (A0_result / 65536.0) / 1192.0 * 23122;
+  voltage2 = (A1_result / 65536.0) / 1192.0 * 23122;
+
+  if (voltage1 < 0.0)
+  {
+    voltage1 = 0.0;
+  }
+  else if (voltage1 > 20.0)
+  {
+    voltage1 = 99.9;
+  }
+
+  if (voltage2 < 0.0)
+  {
+    voltage2 = 0.0;
+  }
+  else if (voltage2 > 20.0)
+  {
+    voltage2 = 99.9;
+  }
+
+  current = (voltage1 - voltage2) / 0.100;
+  //power = voltage1 * current; //Convert to Watts
+
+  if (current < 0.0)
+  {
+    current = 0.0;
+  }
+  else if (current > 99.9)
+  {
+    current = 99.9;
+  }
+
+  uint8_t tens = (uint8_t)(voltage1 / 10.0);
+  voltage1 -= (float)tens * 10.0;
+  uint8_t ones = (uint8_t)voltage1;
+  voltage1 -= (float)ones;
+  voltage1 *= 10.0;
+  voltage1 += 0.5; //Round Up
+  uint8_t tenths = (uint8_t)voltage1;
 
   unsigned char digit = 0x30 + tens;
   if(v_lastCharPos0 != digit)
