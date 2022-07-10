@@ -2,9 +2,12 @@
 #include "Adafruit_GFX.h"    // Core graphics library
 #include "Adafruit_ST7789.h" // Hardware-specific library for ST7789
 #include <SPI.h>
+// #include <Adafruit_NeoPixel.h>
 
 #include "Fonts/FreeSansBoldOblique_60pt7b.h"
 #include "Fonts/FreeSansBoldOblique_32pt7b.h"
+
+// Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL);
 
 // For the breakout board, you can use any 2 or 3 pins.
 // These pins will also work for the 1.8" TFT shield.
@@ -44,14 +47,23 @@ unsigned char a_lastCharPos0 = '0';
 unsigned char a_lastCharPos1 = '0';
 unsigned char a_lastCharPos2 = '0';
 
+const uint16_t CurrentAvgNSamples = 4096;
+uint32_t CurrentAvg[CurrentAvgNSamples];
+uint16_t CurrentIndex = 0;
+
 void setup(void)
 {
-
-  // initialize the serial communication:
-  SerialUSB.begin(9600);
-
+  Serial.begin(115200);
+  
   pinMode(A0, INPUT);
   pinMode(A1, INPUT);
+
+  //pixels.begin();
+
+  for( int i = 0; i < CurrentAvgNSamples; i++)
+  {
+    CurrentAvg[i] = 0;
+  }
   
   // Use this initializer if using a 1.69" 280x240 TFT:
   tft1.init(240, 280);           // Init ST7789 280x240
@@ -103,58 +115,100 @@ void setup(void)
 
   ADC->REFCTRL.reg = 0x80;                         // Enable Ref Comp and use (INT1V) 1.0V voltage reference
   ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV512 |    // Divide Clock ADC GCLK by 512 (48MHz/512 = 93.7kHz)
-                   ADC_CTRLB_RESSEL_16BIT;         // Set ADC resolution to 16 bits
+                   ADC_CTRLB_RESSEL_16BIT; // |        // Set ADC resolution to 16 bits
+                   //ADC_CTRLB_DIFFMODE;             // Set ADC to Differential Mode
   while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
-  ADC->SAMPCTRL.reg = 0x00;                        // Set max Sampling Time Length to half divided ADC clock pulse (5.33us)
-  ADC->INPUTCTRL.reg = 0x00000000;                 // Set the analog input to A0 and to Scan 1 Channel
+  ADC->SAMPCTRL.reg = 0x0;                        // Set max Sampling Time Length to half divided ADC clock pulse (5.33us)
+  ADC->INPUTCTRL.reg = ADC_INPUTCTRL_GAIN_1X |
+                       ADC_INPUTCTRL_INPUTSCAN(0) | 
+                       ADC_INPUTCTRL_INPUTOFFSET(0) |
+                       ADC_INPUTCTRL_MUXNEG_GND |
+                       ADC_INPUTCTRL_MUXPOS_PIN0;
   while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
-  ADC->AVGCTRL.reg = ADC_AVGCTRL_SAMPLENUM_256 |   // Accumulate 256 samples for 16-bit resolution
+  ADC->AVGCTRL.reg = ADC_AVGCTRL_SAMPLENUM_1024 |   // Accumulate 256 samples for 16-bit resolution
                      ADC_AVGCTRL_ADJRES(0);        // Zero result adjust
-  ADC->CTRLA.bit.ENABLE = 0x01;                    // Enable the ADC
+  
+}
+
+void ADCSample(uint16_t& A0_result, uint16_t& A1_result) 
+{   
+  ADC->INPUTCTRL.reg = ADC_INPUTCTRL_GAIN_1X |
+                       ADC_INPUTCTRL_INPUTSCAN(0) | 
+                       ADC_INPUTCTRL_INPUTOFFSET(0) |
+                       ADC_INPUTCTRL_MUXNEG_GND |
+                       ADC_INPUTCTRL_MUXPOS_PIN0;
   while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
 
-  if (SerialUSB.available() > 0)
-  {
-    SerialUSB.print("Hello");
-  }
+  ADC->CTRLA.bit.ENABLE = 0x01;                    // Enable the ADC
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization 
+
+  delay(1);
+
+  ADC->SWTRIG.bit.START = 1;                       // Initiate a software trigger to start an ADC conversion
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for write synchronization
+  while(!ADC->INTFLAG.bit.RESRDY);                 // Wait for the conversion to complete
+  A0_result = ADC->RESULT.reg;                     // Read the ADC result,  This Clears the result ready (RESRDY) interrupt flag
+
+  ADC->CTRLA.bit.ENABLE = 0x00;                    // Disable the ADC
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization 
+
+  ADC->INPUTCTRL.reg = ADC_INPUTCTRL_GAIN_1X |
+                       ADC_INPUTCTRL_INPUTSCAN(0) | 
+                       ADC_INPUTCTRL_INPUTOFFSET(0) |
+                       ADC_INPUTCTRL_MUXNEG_GND |
+                       ADC_INPUTCTRL_MUXPOS_PIN1;
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
+
+  ADC->CTRLA.bit.ENABLE = 0x01;                    // Enable the ADC
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization 
+
+  delay(1);
+
+  ADC->SWTRIG.bit.START = 1;                       // Initiate a software trigger to start an ADC conversion
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for write synchronization
+  while(!ADC->INTFLAG.bit.RESRDY);                 // Wait for the conversion to complete
+  A1_result = ADC->RESULT.reg;                     // Read the ADC result,  This Clears the result ready (RESRDY) interrupt flag
+
+  ADC->CTRLA.bit.ENABLE = 0x00;                    // Disable the ADC
+  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization 
 }
 
 void loop() 
-{
-  while(SerialUSB.available() == 0) 
+{   
+  if(Serial)
   {
+    Serial.println("Testing123");
   }
-
-  SerialUSB.print("Hello");
-    
+  
   float voltage1 = 0.0;
   float voltage2 = 0.0;
   float current = 0.0; //mAmps
-  //float power   = 0.0; //mWatts
+  uint16_t A0_result = 0;
+  uint16_t A1_result = 0;
 
-  ADC->INPUTCTRL.reg = 0x00000000;                 // Set the analog input to A0
-  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
+  ADCSample(A0_result, A1_result);
 
-  ADC->SWTRIG.bit.START = 1;                       // Initiate a software trigger to start an ADC conversion
-  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for write synchronization
-  while(!ADC->INTFLAG.bit.RESRDY);                 // Wait for the conversion to complete
-  uint16_t A0_result = ADC->RESULT.reg;            // Read the ADC result,  This Clears the result ready (RESRDY) interrupt flag
-
-  ADC->INPUTCTRL.reg = 0x00000001;                 // Set the analog input to A1
-  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for synchronization
-
-  ADC->SWTRIG.bit.START = 1;                       // Initiate a software trigger to start an ADC conversion
-  while(ADC->STATUS.bit.SYNCBUSY);                 // Wait for write synchronization
-  while(!ADC->INTFLAG.bit.RESRDY);                 // Wait for the conversion to complete
-  uint16_t A1_result = ADC->RESULT.reg;            // Read the ADC result,  This Clears the result ready (RESRDY) interrupt flag
-
-  if (SerialUSB.available() > 0)
-  {
-    SerialUSB.print(A0_result);
-  }
+//  if (A0_result < 1)
+//  {
+//    pixels.setPixelColor(0, pixels.Color(255,0,0));
+//  }
+//  else if (A0_result < 50)
+//  {
+//    pixels.setPixelColor(0, pixels.Color(0,255,0));
+//  }
+//  else if (A0_result < 100)
+//  {
+//    pixels.setPixelColor(0, pixels.Color(0,0,255));
+//  }
+//  else
+//  {
+//    pixels.setPixelColor(0, pixels.Color(0,255,255));
+//  }
+//
+//  pixels.show();
 
   voltage1 = (A0_result / 65536.0) / 1192.0 * 23122;
-  voltage2 = (A1_result / 65536.0) / 1192.0 * 23122;
+  voltage2 = (A1_result / 65536.0) / 1191.0 * 23051;
 
   if (voltage1 < 0.0)
   {
@@ -174,8 +228,40 @@ void loop()
     voltage2 = 99.9;
   }
 
-  current = (voltage1 - voltage2) / 0.100;
-  //power = voltage1 * current; //Convert to Watts
+  float fsc = (voltage1 - voltage2) * 1000000.0;
+  uint32_t scaledCurrent = (uint32_t)fsc;
+  CurrentAvg[CurrentIndex++] = scaledCurrent;
+  if (CurrentIndex >= CurrentAvgNSamples)
+  {
+    CurrentIndex = 0;
+  }
+
+  uint64_t avgCurrent = 0;
+  for( int i = 0; i < CurrentAvgNSamples; i++)
+  {
+    avgCurrent += CurrentAvg[i];
+  }
+
+  avgCurrent /= CurrentAvgNSamples;
+
+  float ShuntResistance = 0.0005;
+  current = avgCurrent / 1000000.0;
+  current /= ShuntResistance;
+
+  if(Serial)
+  {
+    //Serial.println(PORT->Group[g_APinDescription[0].ulPort].PINCFG[g_APinDescription[0].ulPin].reg);
+    Serial.print(A0_result);
+    Serial.print(" ");
+    Serial.println(voltage1);
+    
+    Serial.print(A1_result);
+    Serial.print(" ");
+    Serial.println(voltage2);
+    
+    Serial.println(avgCurrent);
+    Serial.println(current);
+  }
 
   if (current < 0.0)
   {
@@ -191,7 +277,6 @@ void loop()
   uint8_t ones = (uint8_t)voltage1;
   voltage1 -= (float)ones;
   voltage1 *= 10.0;
-  voltage1 += 0.5; //Round Up
   uint8_t tenths = (uint8_t)voltage1;
 
   unsigned char digit = 0x30 + tens;
@@ -220,7 +305,6 @@ void loop()
   ones = (uint8_t)current;
   current -= (float)ones;
   current *= 10.0;
-  current += 0.5; //Round Up
   tenths = (uint8_t)current;
 
   digit = 0x30 + tens;
