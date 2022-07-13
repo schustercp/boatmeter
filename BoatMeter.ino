@@ -47,7 +47,7 @@ unsigned char a_lastCharPos0 = '0';
 unsigned char a_lastCharPos1 = '0';
 unsigned char a_lastCharPos2 = '0';
 
-const uint16_t CurrentAvgNSamples = 4096;
+const uint16_t CurrentAvgNSamples = 32;
 uint32_t CurrentAvg[CurrentAvgNSamples];
 uint16_t CurrentIndex = 0;
 
@@ -210,6 +210,11 @@ void loop()
   voltage1 = (A0_result / 65536.0) / 1192.0 * 23122;
   voltage2 = (A1_result / 65536.0) / 1191.0 * 23051;
 
+  if (voltage2 > voltage1)
+  {
+    return;
+  }
+
   if (voltage1 < 0.0)
   {
     voltage1 = 0.0;
@@ -244,9 +249,11 @@ void loop()
 
   avgCurrent /= CurrentAvgNSamples;
 
-  float ShuntResistance = 0.0005;
+  avgCurrent -= 8200;
+
+  const float ShuntResistance = 1590.0;
   current = avgCurrent / 1000000.0;
-  current /= ShuntResistance;
+  current *= ShuntResistance;
 
   if(Serial)
   {
