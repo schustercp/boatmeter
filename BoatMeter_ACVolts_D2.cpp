@@ -1,12 +1,21 @@
 #ifdef AC_Volts
+#ifdef DISPLAY2
+
 #include "Adafruit_GFX.h"    // Core graphics library
 #include "Adafruit_ST7789.h" // Hardware-specific library for ST7789
 #include <SPI.h>
-#include "PZEM004T.h"
+#include "PZEM004Tv30.h"
+#include <Wire.h>
 
 #include "Fonts/FreeSansBoldOblique_60pt7b.h"
 #include "Fonts/FreeSansBoldOblique_32pt7b.h"
 #include "Fonts/FreeSansBoldOblique_40pt7b.h"
+
+union FloatBytes 
+{
+    float f;
+    unsigned char bytes[sizeof(float)];
+};
 
 // Adafruit_NeoPixel pixels(1, PIN_NEOPIXEL);
 
@@ -14,10 +23,12 @@
 // These pins will also work for the 1.8" TFT shield.
 // For 1.14", 1.3", 1.54", 1.69", and 2.0" TFT with ST7789:
 //Adafruit_ST7789(int8_t cs, int8_t dc, int8_t rst);
-Adafruit_ST7789 tft = Adafruit_ST7789(2, 0, 1);
+Adafruit_ST7789 tft = Adafruit_ST7789(0, 2, 1);
 
-PZEM004T* pzem;
-IPAddress ip(192,168,1,1);
+//PZEM004T* pzem;
+PZEM004Tv30* pzem;
+//IPAddress ip(192,168,1,1);
+const uint8_t pzemAddress = 0xA5;
 
 float p = 3.1415926;
 
@@ -39,9 +50,9 @@ int freeMemory() {
 #endif  // __arm__
 }
 
-unsigned char v1_lastCharPos0 = '0';
-unsigned char v1_lastCharPos1 = '0';
-unsigned char v1_lastCharPos2 = '0';
+unsigned char v1_lastCharPos0 = '-';
+unsigned char v1_lastCharPos1 = '-';
+unsigned char v1_lastCharPos2 = '-';
 
 unsigned char v2_lastCharPos0 = '0';
 unsigned char v2_lastCharPos1 = '0';
@@ -64,16 +75,34 @@ const double errorCorrect = 1.013;
 
 void setup(void)
 {
+  Wire.begin(0xC0); // join i2c bus (address optional for master)
+
   while(!Serial) { }
   Serial.begin(9600);
 
+  Serial.println("Starting");
+
+#ifdef DISPLAY0
   while(!Serial1) { }
-  pzem = new PZEM004T(&Serial1);
-  pzem->setAddress(ip);
+  //pzem = new PZEM004T(&Serial1);
+  pzem = new PZEM004Tv30(Serial1);
+
+  Serial.println("After PZEM Init");
+#endif
+
+#ifdef DISPLAY2
+  while(!Serial1) { }
+  //pzem = new PZEM004T(&Serial1);
+  pzem = new PZEM004Tv30(Serial1);
+
+  Serial.println("After PZEM Init");
+#endif
 
   // Use this initializer if using a 1.69" 280x240 TFT:
   tft.init(240, 280);           // Init ST7789 280x240
   delay(1);
+
+  Serial.println("After TFT Init");
 
   tft.setRotation(1);
   tft.fillScreen(ST77XX_BLACK);
@@ -100,27 +129,59 @@ void setup(void)
   tft.drawChar(154, y, v1_lastCharPos2, ST77XX_WHITE, ST77XX_BLACK, 1, 1);
 }
 
+FloatBytes voltage1;
+FloatBytes current1;
+FloatBytes power1;
+FloatBytes energy1;
+FloatBytes frequency1;
+FloatBytes pf1;
+
 void loop() 
 { 
-  float voltage1 = ceil(pzem->power(ip));
-  if (voltage1 < 0.0)
-  {
-    voltage1 = 0.0;
-  }
-  Serial.print(voltage1);
-  Serial.print("V; ");
+  voltage1.f   = ceil(pzem->voltage());
+  current1.f   = ceil(pzem->current());
+  power1.f     = ceil(pzem->power());
+  energy1.f    = ceil(pzem->energy());
+  frequency1.f = ceil(pzem->frequency());
+  pf1.f        = ceil(pzem->pf());
 
-  if(voltage1 > 1.0)
+  if(voltage1.f > 300)
   {
-    voltage1 += 1.0;
+    voltage1.f = NAN;
   }
 
-  //Display the house battery voltage
-  uint8_t houndreds = (uint8_t)(voltage1 / 100.0);
-  voltage1 -= (float)houndreds * 100.0;
-  uint8_t tens = (uint8_t)(voltage1 / 10.0);
-  voltage1 -= (float)tens * 10.0;
-  uint8_t ones = (uint8_t)voltage1;
+  uint8_t houndreds = 0x2D - 0x30;
+  uint8_t tens = 0x2D - 0x30;
+  uint8_t ones = 0x2D - 0x30;
+
+#ifdef DISPLAY0
+  float fToDispaly = voltage1.f;
+#endif
+
+#ifdef DISPLAY1
+  float fToDispaly = pf1.f;
+#endif
+
+#ifdef DISPLAY2
+  float fToDispaly = frequency1.f;
+#endif
+
+  if(!isnan(fToDispaly))
+  {
+    Serial.print(fToDispaly);
+    Serial.print("V; ");
+
+    houndreds = 0;
+    tens = 0;
+    ones = 0;
+
+    //Display the house battery voltage
+    houndreds = (uint8_t)(fToDispaly / 100.0);
+    fToDispaly -= (float)houndreds * 100.0;
+    tens = (uint8_t)(fToDispaly / 10.0);
+    fToDispaly -= (float)tens * 10.0;
+    ones = (uint8_t)fToDispaly;
+  }
 
   unsigned char digit = 0x30 + houndreds;
   if(v1_lastCharPos0 != digit)
@@ -142,7 +203,19 @@ void loop()
     tft.drawChar2(154, 115, digit, v1_lastCharPos2, ST77XX_WHITE, ST77XX_BLACK);
     v1_lastCharPos2 = digit;
   }
+
+  Wire.beginTransmission(0xC1); // transmit to device #4
+  Wire.write("BEGN");        // sends five bytes
+  Wire.write(voltage1.bytes, sizeof(float));
+  Wire.write(current1.bytes, sizeof(float));
+  Wire.write(power1.bytes, sizeof(float));
+  Wire.write(energy1.bytes, sizeof(float));
+  Wire.write(frequency1.bytes, sizeof(float));
+  Wire.write(pf1.bytes, sizeof(float));
+  Wire.write("ENDD");
+  Wire.endTransmission();    // stop transmitting
   
   delay(50);
 }
+#endif
 #endif
